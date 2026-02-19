@@ -655,6 +655,17 @@ export default function HomeScope() {
   const [loadMsg, setLoadMsg] = useState("");
   const [error, setError] = useState(null);
   const [searched, setSearched] = useState(false);
+  const [apiKey, setApiKey] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem("anthropic_api_key") || "";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = apiKey.trim();
+    if (key) window.localStorage.setItem("anthropic_api_key", key);
+    else window.localStorage.removeItem("anthropic_api_key");
+  }, [apiKey]);
 
   const up = (k,v) => setC(p => ({...p,[k]:v}));
   const selectCity = ci => { up("location", ci.city+", "+ci.prov); up("selectedCity", ci); };
@@ -690,13 +701,21 @@ export default function HomeScope() {
 
   async function handleSearch() {
     if (!c.location.trim()) { setError("Please select a location."); return; }
+    const key = apiKey.trim();
+    if (!key) { setError("Please add your Anthropic API key in the header first."); return; }
     setLoading(true); setError(null); setResults(null); setSearched(true);
     setLoadMsg("Building search query...");
     try {
       const prompt = buildPrompt();
+      const apiHeaders = {
+        "Content-Type":"application/json",
+        "x-api-key": key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true",
+      };
       setLoadMsg("Searching REALTOR.ca, HouseSigma, Zolo...");
       const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",headers:{"Content-Type":"application/json"},
+        method:"POST",headers:apiHeaders,
         body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:8000, messages:[{role:"user",content:prompt}], tools:[{type:"web_search_20250305",name:"web_search"}] }),
       });
       if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e?.error?.message||`API ${res.status}`); }
@@ -707,13 +726,17 @@ export default function HomeScope() {
       if (!props.length && txt.length > 50) {
         setLoadMsg("Structuring results...");
         const f2 = await fetch("https://api.anthropic.com/v1/messages", {
-          method:"POST",headers:{"Content-Type":"application/json"},
+          method:"POST",headers:apiHeaders,
           body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:8000, messages:[{role:"user",content:prompt},{role:"assistant",content:txt},{role:"user",content:"Reformat as JSON array only. Start with [ end with ]. No markdown. Include listing URLs and photo URLs."}] }),
         });
         if (f2.ok) { const d2 = await f2.json(); const t2 = (d2.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n"); props = robustParseJSON(t2); }
       }
       props.length ? setResults(props) : setError("No matching properties found. Try broadening your criteria.");
-    } catch(e) { setError(`Search failed: ${e.message}`); } finally { setLoading(false); }
+    } catch(e) {
+      const msg = e?.message || "Unknown error";
+      if (msg === "Failed to fetch") setError("Search failed: network/CORS blocked. Verify API key and try again.");
+      else setError(`Search failed: ${msg}`);
+    } finally { setLoading(false); }
   }
 
   const center = c.selectedCity || { lat:44.3894, lng:-79.6903 };
@@ -822,7 +845,15 @@ export default function HomeScope() {
             <div><h1 style={{margin:0,fontSize:20,fontWeight:800,letterSpacing:-.5}}>HomeScope</h1><p style={{margin:0,fontSize:10,color:"var(--text-muted)",letterSpacing:1.5,textTransform:"uppercase",fontWeight:600}}>Canadian Property Intelligence</p></div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e=>setApiKey(e.target.value)}
+              placeholder="Anthropic API key"
+              style={{...INP,width:230,height:34,padding:"0 12px",fontSize:12}}
+            />
             <span style={{padding:"4px 10px",borderRadius:8,fontSize:11,fontWeight:600,background:"var(--surface)",border:"1px solid var(--border)",color:"var(--text-muted)"}}>🇨🇦 CAD</span>
+            {apiKey.trim() && <button onClick={()=>setApiKey("")} style={{padding:"7px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"var(--text-secondary)",fontSize:12,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>Clear Key</button>}
             {searched && results && <button onClick={()=>{setSearched(false);setResults(null);setStep(0);}} style={{padding:"7px 16px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"var(--text-secondary)",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit"}}>← New Search</button>}
           </div>
         </div>
